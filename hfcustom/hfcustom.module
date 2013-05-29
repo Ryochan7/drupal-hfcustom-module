@@ -1,0 +1,912 @@
+<?php
+
+function hfcustom_menu () {
+    $items['admin/config/system/hellfire'] = array(
+        'title' => 'Hellfire Settings',
+        'description' => 'Custom settings relating to Hellfire Commentaries',
+        'page callback' => 'hfcustom_settings',
+        'access arguments' => array('administer site configuration'),
+        'type' => MENU_NORMAL_ITEM,
+    );
+    return $items;
+}
+
+function hfcustom_settings () {
+    $form = drupal_get_form ("hfcustom_streamers_form");
+    return $form;
+}
+
+function hfcustom_streamers_form ($form, &$form_state) {
+    $form = array();
+    $form['streamers_list'] = array(
+      '#required' => '1',
+      '#description' => t('Enter one stream:display_name per line for each stream from Justin.tv/Twitch.tv. ex. hellfirecomms: NTom64'),
+      '#cols' => '30',
+      '#type' => 'textarea',
+      '#title' => t('Streamers List'),
+    );
+    $streamers = variable_get ("justin_streamer_list", "");
+    $streamer_value = "";
+    if ($streamers) {
+        $streamers = json_decode ($streamers);
+
+        foreach ($streamers as $key => $value) {
+            $streamer_value .= $key . ": " . $value . "\n";
+        }
+        $form["streamers_list"]["#default_value"] = $streamer_value;
+    }
+
+    $form['submit'] = array(
+        '#type' => 'submit',
+        '#value' => t('Submit'),
+    );
+    return $form;
+}
+
+function hfcustom_streamers_form_validate($form, &$form_state) {
+    // Validation logic.
+    $streamers_final = array ();
+    if (!empty ($form_state["values"]["streamers_list"])) {
+        $streamers_string = trim ($form_state["values"]["streamers_list"]);
+        $streamers_array = explode ("\r\n", $streamers_string);
+        $streamers_count = count ($streamers_array);
+        $invalid = false;
+        for ($i=0; $i < $streamers_count && !$invalid; $i++) {
+            $streamer = $streamers_array[$i];
+            $stream_array = explode (":", $streamer);
+            if (count ($stream_array) != 2) {
+                form_set_error ("streamers_list", t ("Malformed line \"{$streamer}\""));
+                $invalid = true;
+            }
+        }
+    }
+    else {
+        form_set_error ("streamers_list", t ("Streamers list required"));
+    }
+}
+
+function hfcustom_streamers_form_submit($form, &$form_state) {
+    // Submission logic.
+    $streamers_string = trim ($form_state["values"]["streamers_list"]);
+    $streamers_array = explode ("\r\n", $streamers_string);
+    $streamers_final = array ();
+    
+    // Strip any excess whitespace between stream names
+    $num_elements = count ($streamers_array);
+    for ($i=0; $i < $num_elements; $i++) {
+        $streamer = $streamers_array[$i];
+        $stream_array = explode (":", $streamer);
+        $stream_name = trim ($stream_array[0]);
+        $display_name = trim ($stream_array[1]);
+        $streamers_final[$stream_name] = $display_name;
+    }
+    $streamers_json = json_encode ($streamers_final);
+
+    variable_set ("justin_streamer_list", $streamers_json);
+    drupal_set_message (t ("Streamers list was updated"));
+}
+
+function hfcustom_autoplayform () {
+    $form = array();
+    $form['autoplay'] = array(
+      '#weight' => '0',
+      '#key_type_toggled' => '1',
+      '#default_value' => 'off',
+      '#type' => 'select',
+      '#options' => array(
+        'off' => t('Off'),
+        'on' => t('On'),
+      ),
+      '#multiple_toggle' => '1',
+      '#title' => t('Autoplay:'),
+      '#field_prefix' => '<div class="autoplay-select-container">',
+      '#field_suffix' => '</div>',
+    );
+
+    if (!empty ($_COOKIE["autoplay"])) {
+        if ($_COOKIE["autoplay"] == "on" or $_COOKIE["autoplay"] == "true") {
+            $form["autoplay"]["#default_value"] = "on";
+        }
+    }
+    return $form;
+}
+
+/**
+ * Implements hook_form_form_id_alter ()
+ */
+function hfcustom_form_user_profile_form_alter (&$form, &$form_state, $form_id) {
+    global $user;
+
+    //if (array_search ("admin", $user->roles) === FALSE)
+    if (!user_access ("administer users"))
+    {
+        unset ($form["picture"]);
+        unset ($form["field_user_twitter"]);
+        unset ($form["field_user_facebook"]);
+        unset ($form["field_user_website"]);
+        unset ($form["field_user_youtube"]);
+        unset ($form["field_user_blip"]);
+    }
+}
+
+/**
+ * Implements hook_form_form_id_alter ()
+ */
+function hfcustom_form_podcast_episode_node_form_alter (&$form, &$form_state, $form_id)
+{
+    $field_language = $form["field_podcast_episode_duration"]["#language"];
+    if (!empty ($form["field_podcast_episode_duration"][$field_language][0]["value"]["#default_value"]))
+    {
+        $original_duration = $form["field_podcast_episode_duration"][$field_language][0]["value"]["#default_value"];
+        $matches = array ();
+        if (preg_match_all ("/\d[2]:\d[2]:\d[2]/", $original_duration, $matches) <= 0)
+        {
+            if (ctype_digit ($original_duration))
+            {
+                $duration = (int) $original_duration;
+                $seconds = $duration % 60;
+                $duration = ($duration - $seconds) / 60;
+
+                $minutes =  $duration % 60;
+                $hours = ($duration - $minutes) / 60;
+                $form["field_podcast_episode_duration"][$field_language][0]["value"]["#default_value"] = sprintf ("%02d:%02d:%02d", $hours, $minutes, $seconds);
+            }
+        }
+    }
+
+    $form["#validate"][] = "hfcustom_form_podcast_episode_node_form_validate";
+    unset ($form["field_podcast_episode_duration"][LANGUAGE_NONE][0]["value"]["#element_validate"]);
+}
+
+function hfcustom_form_podcast_episode_node_form_validate ($form, &$form_state)
+{
+    if (!empty ($form_state["values"]["field_podcast_episode_duration"][LANGUAGE_NONE][0]["value"]))
+    {
+        $matches = array ();
+        $string_duration = $form_state["values"]["field_podcast_episode_duration"]["und"][0]["value"];
+        if (preg_match_all ("/(\d{2}):(\d{2}):(\d{2})/", $string_duration, $matches) > 0)
+        {
+            $hours = (int) $matches[1][0];
+            $minutes = (int) $matches[2][0];
+            $seconds = (int) $matches[3][0];
+
+            $duration = ($hours * 3600) + ($minutes * 60) + ($seconds);
+            form_set_value ($form["field_podcast_episode_duration"], array (LANGUAGE_NONE => array (0 => array ("value" => (string) $duration))), $form_state);
+
+        }
+        else if (!ctype_digit ($string_duration))
+        {
+            form_set_error ("field_podcast_episode_duration", t("Duration must be given in either HH:MM:SS format or the number of seconds"));
+        }
+    }
+}
+
+/**
+ * Implements hook_form_form_id_alter ()
+ */
+function hfcustom_form_comment_form_alter (&$form, &$form_state, $form_id)
+{
+    if ($form["#node"]->type != "forum")
+    {
+        unset ($form["subject"]);
+        unset ($form["actions"]["preview"]);
+        $form["actions"]["submit"]["#value"] = t("Submit Comment");
+        $form["gravtip"]["#markup"] = '<div class="gravtip"><p>User pictures utilize the <a href="http://gravatar.com/" target="_blank">Gravatar</a> service. If you would like a custom picture next to your comments, please go to <a href="http://gravatar.com/" target="_blank">gravatar.com</a> and create a profile.</p></div>';
+        $form["gravtip"]["#weight"] = -100;
+    }
+}
+
+/**
+ * Implements hook_block_info ()
+ */
+function hfcustom_block_info () {
+    $blocks["video_autoplay"] = array (
+        "info" => t("Autoplay for Videos"),
+    );
+    $blocks["hf_user_block"] = array (
+        "info" => t("Custom Who's Online"),
+    );
+    $blocks["hf_justin_streaming"] = array (
+        "info" => t("Justin.tv Streaming"),
+    );
+    $blocks["hf_forum_posts"] = array (
+        "info" => t("Forum Activity"),
+    );
+
+
+    return $blocks;
+}
+
+/**
+ * Implements hook_block_view ()
+ */
+function hfcustom_block_view ($delta = '') {
+    switch ($delta) {
+      case "video_autoplay":
+        $block["subject"] = t("Autoplay Form");
+        $block["content"] = drupal_get_form ("hfcustom_autoplayform");
+        return $block;
+        break;
+
+      case "hf_user_block":
+        $block["subject"] = t("Who's Online");
+        $output = "";
+        if (user_access('access content')) {
+            // Count users active within the defined period.
+            $interval = REQUEST_TIME - variable_get('user_block_seconds_online', 900);
+
+            // Perform database queries to gather online user lists. We use s.timestamp
+            // rather than u.access because it is much faster.
+            $authenticated_count = db_query("SELECT COUNT(DISTINCT s.uid) FROM {sessions} s WHERE s.timestamp >= :timestamp AND s.uid > 0", array(':timestamp' => $interval))->fetchField();
+
+            //$guest_count = db_query("SELECT COUNT(DISTINCT s.uid) FROM {sessions} s WHERE s.timestamp >= :timestamp AND s.uid = 0", array(':timestamp' => $interval))->fetchField();
+            $guest_count = db_query("SELECT COUNT(DISTINCT s.hostname) FROM {sessions} s WHERE s.timestamp >= :timestamp AND s.uid = 0", array(':timestamp' => $interval))->fetchField();
+
+            $output = '<p>' . format_plural($authenticated_count, 'There is currently 1 user online', 'There are currently @count users online');
+            $output .= " and " . format_plural ($guest_count, "1 guest online.", "@count guests online.") . "<p>";
+
+            // Display a list of currently online users.
+            $max_users = variable_get('user_block_max_list_count', 10);
+            if ($authenticated_count && $max_users) {
+              $items = db_query_range('SELECT u.uid, u.name, MAX(s.timestamp) AS max_timestamp FROM {users} u INNER JOIN {sessions} s ON u.uid = s.uid WHERE s.timestamp >= :interval AND s.uid > 0 GROUP BY u.uid, u.name ORDER BY max_timestamp DESC', 0, $max_users, array(':interval' => $interval))->fetchAll();
+              $output .= theme('user_list', array('users' => $items));
+            }
+        }
+
+        $block['content'] = $output;
+        return $block;
+        break;
+
+    case "hf_justin_streaming":
+        $block["subject"] = t ("Currently Streaming");
+        $output = "";
+        $last_stream_check = variable_get ("justin_lastcheck_time", null);
+
+        $current_time = time ();
+        $cache_duration = 60 * 10;
+        if ($last_stream_check && is_numeric ($last_stream_check)) {
+            $diff_time = $current_time - $last_stream_check;
+            // If duration has passed, check Justin.tv
+            if ($diff_time > $cache_duration) {
+                check_streaming_xml ($current_time);
+            }
+        }
+        // Assume first time usage
+        else {
+            check_streaming_xml ($current_time);
+        }
+
+        $output = "";
+        $xml = variable_get ("justin_stream_xml", null);
+        $sim_xml = null;
+        if ($xml) {
+            $sim_xml = new SimpleXMLElement ($xml);
+        }
+
+        $streamer_json = variable_get ("justin_streamer_list", null);
+        if ($sim_xml != null && $streamer_json) {
+            $streamers_array = json_decode ($streamer_json);
+
+            foreach ($streamers_array as $stream => $display_name) {
+                $channel = $sim_xml->xpath ("/streams/stream/channel[login='" . $stream . "']");
+                if (count ($channel) > 0) {
+                    $channel = $channel[0];
+                    $output .= '<div class="twitch_streamer clearfix"><span class="channel"><a href="' . $channel->channel_url . '" target="_blank">' . $display_name . '</a></span><span class="online"></span></div>';
+                }
+            }
+        }
+
+        if ($output != "") {
+            $output = '<div id="streaming_intro" class="clearfix"><span id="twitch_stream_icon"></span><span id="streaming_message">Check out these currently active streams</span></div><div id="twitch_streamers">' . $output . '</div>';
+        }
+
+        $block["content"] = $output;
+        return $block;
+        break;
+
+      case "hf_forum_posts":
+        $block["subject"] = t("Forum Activity");
+        $block["content"] = array (
+            0 => array ("#markup" => ""),
+        );
+
+        // How Many Topics you want to display?
+        $topicnumber = 8;
+        // Change this to your phpBB path
+        $urlPath = "forums";
+        
+        $cache_duration = 60; // Time to keep cached version in seconds
+        $cached_info = variable_get ("hfcustom_phpbb_forum_posts", null);
+        $use_cache = false;
+        $posts = null;
+            $output = "";
+
+        if ($cached_info)
+        {
+            $info = $cached_info;
+            if (time () - $info["time"] <= $cache_duration)
+            {
+                $use_cache = true;
+                $posts = $info["posts"];
+            }
+        }
+        
+
+        if (!$use_cache)
+        {
+            // Database Configuration (Where your phpBB config.php file is located)
+            include 'forums/config.php';
+
+            $table_topics = $table_prefix . "topics";
+            $table_forums = $table_prefix . "forums";
+            $table_posts = $table_prefix . "posts";
+            $table_users = $table_prefix . "users";
+
+            $query = "SELECT t.topic_id, t.topic_title, t.topic_last_post_id, t.forum_id, p.post_id, p.poster_id, p.post_time, u.user_id, u.username
+                FROM ${table_topics} t
+                INNER JOIN ${table_forums} f ON f.forum_id = t.forum_id
+                INNER JOIN ${table_posts} p ON p.post_id = t.topic_last_post_id
+                INNER JOIN ${table_users} u ON u.user_id = p.poster_id
+
+                WHERE
+                  t.forum_id != 4 AND
+                  t.topic_status <> 2
+                ORDER BY p.post_id DESC LIMIT ${topicnumber}";
+
+
+            $result = db_query ($query);
+            $posts = array ();
+            while ($row = $result->fetchAssoc ())
+            {
+                $posts[] = $row;
+            }
+            $final = array ("time" => time (), "posts" => $posts);
+            variable_set ("hfcustom_phpbb_forum_posts", $final);
+        }
+
+        foreach ($posts as $row)
+        {
+            $output .= "<a href=\"/${urlPath}/viewtopic.php?f=${row['forum_id']}&t=${row['topic_id']}&p=${row['post_id']}#p${row['post_id']}\" target=\"_blank\">" .
+                  substr($row ['topic_title'], 0, 35) .
+                  "</a> - by <b><i>${row['username']}</i></b><br/><br/>";
+
+        }
+
+        $block["content"][0]["#markup"] = $output;
+        return $block;
+        break;
+
+    }
+
+}
+
+/**
+ * Small utility function that checks the Justin.tv API
+ * for if hellfirecomms is currently streaming. Saves
+ * Last time checked and streaming status in database.
+ */
+function check_streaming_xml ($current_time) {
+    $streamers_json = variable_get ("justin_streamer_list", null);
+    $streamers_array = null;
+    if ($streamers_json) {
+        variable_set ("justin_lastcheck_time", $current_time);
+        $streamers_array = json_decode ($streamers_json);
+        $stream_names_array = array ();
+        foreach ($streamers_array as $stream => $display_name) {
+            $stream_names_array[] = $stream;
+        }
+
+        $justin_url = "http://api.justin.tv/api/stream/list.xml?channel=" . implode (",", $stream_names_array);
+        $xml = @file_get_contents ($justin_url);
+        if ($xml) {
+            $sxml = new SimpleXMLElement ($xml);
+            variable_set ("justin_stream_xml", $xml);
+        }
+    }
+    
+}
+
+
+/**
+ * Implements hook_block_configure ()
+ */
+function hfcustom_block_configure ($delta) {
+    switch ($delta) {
+        case "hf_user_block":
+          $period = drupal_map_assoc(array(30, 60, 120, 180, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 10800, 21600, 43200, 86400), 'format_interval');
+          $form['user_block_seconds_online'] = array(
+              '#type' => 'select',
+              '#title' => t('User activity'),
+              '#default_value' => variable_get('user_block_seconds_online', 900),
+              '#options' => $period,
+              '#description' => t('A user is considered online for this long after they have last viewed a page.'),
+          );
+
+          $form['user_block_max_list_count'] = array(
+              '#type' => 'select',
+              '#title' => t('User list length'),
+              '#default_value' => variable_get('user_block_max_list_count', 10),
+              '#options' => drupal_map_assoc(array(0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100)),
+              '#description' => t('Maximum number of currently online users to display.'),
+          );
+          return $form;
+          break;
+    }
+}
+
+/**
+ * Implements hook_block_save ()
+ */
+function hfcustom_block_save ($delta = '', $edit = array ()) {
+    global $user;
+
+    switch ($delta) {
+      case "hf_user_block":
+        variable_set('user_block_seconds_online', $edit['user_block_seconds_online']);
+        variable_set('user_block_max_list_count', $edit['user_block_max_list_count']);
+        break;
+    }
+}
+
+/**
+ * Implements hook_node_load ()
+ */
+function hfcustom_node_load ($nodes) {
+    $content_array = array (
+        "playthrough_video", "video_game_music_picks_video",
+        "fan_media_artwork",
+    );
+
+    foreach ($nodes as $node) {
+        $query = db_select ("node", "n")
+            ->condition ("n.type", $node->type, "=")
+        ->condition ("n.created", $node->created, ">")
+            ->condition ("n.status", "1", "=")
+            ->fields ("n", array ("nid"))
+            ->orderBy ("n.created", "ASC")
+            ->range (0, 1);
+
+        $prev_query = db_select ("node", "n")
+        ->condition ("n.type", $node->type, "=")
+            ->condition ("n.status", "1", "=")
+            ->condition ("n.created", $node->created, "<")
+            ->fields ("n", array ("nid"))
+            ->orderBy ("n.created", "DESC")
+            ->range (0, 1);
+
+        if (in_array ($node->type, $content_array)) {
+            if ($node->type == "playthrough_video") {
+                $query->join ("field_data_field_playthrough", "play", "n.type = play.bundle AND n.nid = play.entity_id");
+                $query = $query->condition ("play.field_playthrough_nid", $node->field_playthrough["und"][0]["nid"]);
+            }
+
+            $next_nid = $query->execute ()->fetchField ();
+            $prev_nid = $prev_query->execute ()->fetchField ();
+
+            $node->next_node_url = "";
+            if ($next_nid) {
+                $node->next_node_url = url ("node/{$next_nid}");
+            }
+            if ($prev_nid)
+            {
+                $node->prev_node_url = url ("node/{$prev_nid}");
+            }
+        }
+    }
+}
+
+
+
+/**
+ * Implements hook_node_presave ()
+ */
+function hfcustom_node_presave ($node) {
+    $content_array = array (
+        "playthrough_video" => array (
+            "dir" => "playvideo", "thumbnail_field" => "field_playvideo_thumbnail",
+            "feedcache" => "field_blip_feedcache"
+        ),
+        "review_video" => array (
+            "dir" => "review_videos", "thumbnail_field" => "field_video_thumbnail",
+            "feedcache" => "field_blip_feedcache"
+        ),
+        "dramatic_readings_video" => array ("dir" => "dramatic_readings"),
+        "live_stream_video" => array ("dir" => ""),
+        "fan_media_video" => array ("dir" => "fan_media_videothumb", "thumbnail_field" => "field_video_thumbnail"),
+        "affiliate_video" => array ("dir" => "affiliate_video", "thumbnail_field" => "field_video_thumbnail"),
+    );
+
+    if (!empty ($content_array[$node->type])) {
+        $wrapper = entity_metadata_wrapper ("node", $node);
+
+        $thumb_directory = (!empty ($content_array[$node->type]["dir"])) ? $content_array[$node->type]["dir"] : "";
+        $thumb_field = (!empty ($content_array[$node->type]["thumbnail_field"])) ? $content_array[$node->type]["thumbnail_field"] : "";
+        $cache_field = (!empty ($content_array[$node->type]["feedcache"])) ? $content_array[$node->type]["feedcache"] : "";
+        $lookup_code = !empty ($wrapper->field_video_lookup_code) ? true : false;
+
+        $video_url = field_get_items ("node", $node, "field_videourl");
+        $video_url = $video_url[0]["value"];
+        $matches = null;
+
+        if (preg_match_all ("/http:\/\/(?:www\.)?blip\.tv\/\S+\/.*-(\d+)/", $video_url, $matches)) {
+            $alias = $matches[1][0];
+
+            if (($thumb_field && $wrapper->$thumb_field->value () == "") || ($lookup_code && $wrapper->field_video_lookup_code->value () == "")
+                || ($cache_field && $wrapper->$cache_field->value () == ""))
+            {
+                $feed = file_get_contents ("http://blip.tv/rss/flash/{$alias}");
+
+                if ($feed) {
+                    $sxml = new SimpleXMLElement ($feed);
+                    $blip = $sxml->channel->item->children("http://blip.tv/dtd/blip/1.0");
+                    
+                    if ($thumb_field && $wrapper->$thumb_field->value () == "")
+                    {
+                        $file = file_save_data (file_get_contents ("http://a.images.blip.tv/{$blip->thumbnail_src}"), "public://{$thumb_directory}/" . basename ($blip->thumbnail_src));
+                        $node->{$thumb_field}["und"][0] = (array) $file;
+                    }
+
+                    if ($lookup_code && $wrapper->field_video_lookup_code->value () == "")
+                    {
+                        //$node->field_video_lookup_code["und"][0]["value"] = (string) $blip->embedLookup;
+                        $wrapper->field_video_lookup_code = (string) $blip->embedLookup;
+                    }
+
+                    if ($cache_field && $wrapper->$cache_field->value () == "")
+                    {
+                        $wrapper->$cache_field = $feed;
+                    }
+                }
+            }
+        }
+        else if (preg_match_all ("/(?:http|https):\/\/(?:www\.)?youtube\.com\/watch\?v=([0-9a-zA-Z_-]+).*/", $video_url, $matches))
+        {
+            $alias = $matches[1][0];
+
+            if ($thumb_field && $wrapper->$thumb_field->value () == "")
+            {
+                $feed = file_get_contents ("http://gdata.youtube.com/feeds/api/videos/{$alias}?alt=json");
+                if ($feed)
+                {
+                    $array_feed = json_decode ($feed, true);
+                    if (!empty ($array_feed["entry"]['media$group']['media$thumbnail'][0]))
+                    {
+                        $thumbnail = $array_feed["entry"]['media$group']['media$thumbnail'][0];
+
+                        $youtube_thumb = (string) $thumbnail["url"];
+                        $file = file_save_data (file_get_contents ($youtube_thumb), "public://{$thumb_directory}/{$alias}_" . basename ($youtube_thumb));
+                        $node->{$thumb_field}["und"][0] = (array) $file;
+                        //$wrapper->$thumb_field = (array) $file;
+                    }
+                }
+            }
+        }
+    }
+    else if ($node->type == "fan_media_artwork") {
+        $wrapper = entity_metadata_wrapper('node', $node);
+
+        if ($wrapper->field_fanmedia_file_thumbnail->value () == null) {
+            $media_file = $wrapper->field_fanmedia_artwork->value ();
+        $media_file = file_load ($media_file["fid"]);
+        $date_suffix = date ("Y_m_d");
+        if (!is_dir (drupal_realpath ("public://fan_media_filethumb_{$date_suffix}")))
+        {
+            drupal_mkdir ("public://fan_media_filethumb_{$date_suffix}");
+        }
+            $node->field_fanmedia_file_thumbnail["und"][0] = (array) file_copy ($media_file, "public://fan_media_filethumb_{$date_suffix}");
+            //$node->field_fanmedia_file_thumbnail["und"][0] = (array) file_copy ($media_file, "public://fan_media_filethumb");
+        }
+    }
+    else if ($node->type == "podcast_episode")
+    {
+        $wrapper = entity_metadata_wrapper('node', $node);
+
+        if ($wrapper->field_podcast_episode_duration->value () == "")
+        {
+            $episode_file_wrapper = $wrapper->field_podcast_episode_file->value ();
+            $episode_file = file_load ($episode_file_wrapper["fid"]);
+            $schema = file_uri_scheme ($episode_file->uri);
+            if ($schema == "public")
+            {
+                getid3_load ();
+                $file_path = drupal_realpath ($episode_file->uri);
+                $info = getid3_analyze ($file_path);
+                $wrapper->field_podcast_episode_duration = floor ($info["playtime_seconds"]);
+            }
+            else if ($schema == "http")
+            {
+                $url_info = parse_url ($episode_file->uri);
+                if ($url_info["host"] == $_SERVER["SERVER_NAME"])
+                {
+                    getid3_load ();
+                    $file_path = urldecode ($_SERVER["DOCUMENT_ROOT"] . $url_info["path"]);
+                    $info = getid3_analyze (realpath ($file_path));
+                    $wrapper->field_podcast_episode_duration = floor ($info["playtime_seconds"]);
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Implements hook_views_pre_build ()
+ */
+function hfcustom_views_pre_build(&$view) {
+    global $user, $theme;
+
+    if ($view->name == "related_playthrough_vids" || $view->name == "mobile_playthrough_vids") {
+        if (!isset ($_GET["page"]) || !is_numeric ($_GET["page"])) {
+            $node = node_load (arg (1));
+            if ($node->type == "playthrough_video") {
+                $query = db_select ('node', 'n')->condition ("n.type", "playthrough_video", "=")
+                    ->condition ("n.nid", arg (1), "<");
+                $query->join ("field_data_field_playthrough", "play", "n.type = play.bundle AND n.nid = play.entity_id");
+
+                $query = $query->condition ("play.field_playthrough_nid", $node->field_playthrough["und"][0]["nid"])->countQuery ();
+
+                $num_rows = $query->execute ()->fetchField ();
+                $page = floor ($num_rows / 5);
+                //$remain = $num_rows % 5;
+                $view->current_page = $page;
+                $view->items_per_page = 5;
+            }
+        }
+    }
+    else if ($view->name == "related_reviewer_vids" || $view->name == "related_reviewer_mobile_vids") {
+        if (!isset ($_GET["page"]) || !is_numeric ($_GET["page"])) {
+            $node = node_load (arg (1));
+            if ($node->type == "review_video") {
+                $query = db_select ('node', 'n')->condition ("n.type", "review_video", "=")
+                    ->condition ("n.nid", arg (1), "<");
+                $query->join ("field_data_field_reviewer", "reviewer", "n.type = reviewer.bundle AND n.nid = reviewer.entity_id");
+
+                $query = $query->condition ("reviewer.field_reviewer_nid", $node->field_reviewer["und"][0]["nid"])->countQuery ();
+
+                $num_rows = $query->execute ()->fetchField ();
+                $page = floor ($num_rows / 5);
+                //$remain = $num_rows % 5;
+                $view->current_page = $page;
+                $view->items_per_page = 5;
+            }
+        }
+    }
+    else if ($view->name == "skin_selector") {
+        $render_theme = (!empty ($_GET["theme"])) ? $_GET["theme"] : "";
+        $query = db_select ("node", "n")
+            ->condition ("n.type", "exposed_theme", "=");
+
+        $query->join ("field_data_field_theme_alias", "theme_alias", "n.type = theme_alias.bundle AND n.nid = theme_alias.entity_id");
+
+        $query = $query->fields ("theme_alias", array ("field_theme_alias_value"))
+            ->condition ("theme_alias.field_theme_alias_value", $theme)->range (0, 1);
+
+        if ($render_theme && $user->uid > 0 && user_access('select different theme')) {
+            $account = user_load ($user->uid, true);
+            // Check that the theme is exposed.
+            $exists = $query->execute ()->fetchField ();
+
+            // Check that theme is exposed. If not, Drupal will use the default theme
+            if ($account->theme == $render_theme && !empty ($exists)) {
+                drupal_set_message (t ("Skin change was successful"));
+            }
+            // Force Drupal to use default theme. Switchtheme already removed previous setting
+            else if ($account->theme == $render_theme) {
+                user_save($account, array('theme' => ""));
+                drupal_set_message (t ("Skin change failed. Skin does not exist."), "error");
+            }
+            // Theme is not enabled
+            else {
+                drupal_set_message (t ("Skin change failed. Skin does not exist."), "error");
+            }
+            drupal_goto ($view->display_handler->display->display_options["path"]);
+        }
+        else if ($render_theme) {
+            // Check that Switchtheme init hook did its job
+            $session_theme = (!empty ($_SESSION["custom_theme"])) ? $_SESSION["custom_theme"] : "";
+            if ($session_theme == $render_theme) {
+                // Check that the theme is exposed.
+                $exists = $query->execute ()->fetchField ();
+                if (!empty ($exists)) {
+                    drupal_set_message (t ("Skin change was successful"));
+                }
+                else {
+                    // Force Drupal to use default theme. Switchtheme already removed previous setting
+                    unset ($_SESSION["custom_theme"]);
+                    drupal_set_message (t ("Skin change failed. Skin does not exist."), "error");
+                }
+            }
+            // Theme is not enabled
+            else {
+                drupal_set_message (t ("Skin change failed. Skin does not exist."), "error");
+            }
+
+            drupal_goto ($view->display_handler->display->display_options["path"]);
+        }
+        
+    }
+    else if ($view->name == "fan_media_artwork_block") {
+        if (!isset ($_GET["page"]) || !is_numeric ($_GET["page"])) {
+            $node = node_load (arg (1));
+            if ($node->type == "fan_media_artwork") {
+        $query = db_select ('node', 'n')->condition ("n.type", $node->type, "=")
+            ->condition ("n.nid", arg (1), "<")
+            ->condition ("n.status", "1", "=");
+
+                $num_rows = $query->countQuery ()->execute ()->fetchField ();
+                $page = floor ($num_rows / 5);
+                //$remain = $num_rows % 5;
+                $view->current_page = $page;
+                $view->items_per_page = 5;
+            }
+        }
+    }
+    else if ($view->name == "playthroughs_index" && $theme == "mobile")
+    {
+        $view->items_per_page = 10;
+    }
+    else if ($view->name == "related_affiliate_series_vids")
+    {
+        if (!isset ($_GET["page"]) || !is_numeric ($_GET["page"])) {
+            $node = node_load (arg (1));
+            if ($node->type == "affiliate_video") {
+                $query = db_select ('node', 'n')->condition ("n.type", "affiliate_video", "=")
+                    ->condition ("n.nid", arg (1), "<");
+                $query->join ("field_data_field_affiliate_series", "aff", "n.type = aff.bundle AND n.nid = aff.entity_id");
+
+                $query = $query->condition ("aff.field_affiliate_series_nid", $node->field_affiliate_series["und"][0]["nid"])->countQuery ();
+
+                $num_rows = $query->execute ()->fetchField ();
+                $page = floor ($num_rows / 5);
+                //$remain = $num_rows % 5;
+                $view->current_page = $page;
+            }
+        }
+    }
+}
+
+/**
+ * Implements hook_views_pre_execute ()
+ */
+function hfcustom_views_pre_execute (&$view)
+{
+    if ($view->name == "banner_slideshow")
+    {
+        //dsm ($view->build_info["query"]->__toString ());    
+        $query = db_select ("node", "n")
+            ->condition ("n.type", "front_page_banner", "=")
+            ->condition ("n.status", "1", "=")
+            ->fields ("n", array ("nid", "changed"))
+            ->orderBy ("n.changed", "DESC")
+            ->range (0, 4);
+        
+        $result = $query->execute ();
+        
+        $nid_array = array ();
+        $last_date = null;
+        foreach ($result as $record)
+        {
+            $last_date = $record->changed;
+        }
+
+        if ($last_date)
+        {
+            $subquery = db_select ("node", "n")
+                ->condition ("n.type", "front_page_banner", "=")
+                ->condition ("n.status", "1", "=")
+                ->fields ("n", array ("title", "nid", "language", "created"))
+                ->condition ("n.changed", $last_date, "<")
+                ->orderBy ("RAND()", "DESC")
+                ->range (0, 4);
+
+            $subquery->addExpression ("'node'", "field_data_field_frontpage_url_link_node_entity_type");
+            $subquery->addExpression ("'node'", "field_data_field_frontpage_banner_node_entity_type");
+
+            $alterTags = $view->build_info["query"]->alterTags;
+            $alterMetaData = $view->build_info["query"]->alterMetaData;
+            $base_query = $view->build_info["query"];
+            $base_query->range (0, 4);
+
+            $first_parent_query = db_select ($base_query, "latest");
+            $first_parent_query->fields ("latest");
+            $second_parent_query = db_select ($subquery, "random");
+            $second_parent_query->fields ("random");
+            $first_parent_query->union ($second_parent_query);
+
+            $root_query = db_select ($first_parent_query, "combined");
+            $root_query->fields ("combined");
+            $root_query->alterTags = $alterTags;
+            $root_query->alterMetaData = $alterMetaData;
+            $view->build_info["query"] = $root_query;
+        }
+    }
+}
+
+/**
+ * Implements hook_views_pre_render ()
+ */
+function hfcustom_views_pre_render (&$view) {
+    global $theme;
+
+    if ($view->name == "related_playthrough_vids" ||
+        $view->name == "related_reviewer_vids" ||
+        $view->name == "related_reviewer_mobile_vids" || 
+        $view->name == "fan_media_artwork_block" ||
+        $view->name == "mobile_playthrough_vids" ||
+        $view->name == "related_affiliate_series_vids")
+    {
+        global $in_playthrough_vid;
+        $in_playthrough_vid = true;
+    }
+
+    if ($view->name == "hellfire_versus" && $view->current_display == "page" && $theme != "mobile")
+    {
+        $view->header["area_1"]->options["content"] = "";
+    }
+}
+
+
+/**
+ * Implements hook_views_post_render ()
+ */
+function hfcustom_views_post_render (&$view, &$output, &$cache) {
+    global $in_playthrough_vid;
+    if ($view->name == "related_playthrough_vids" ||
+        $view->name == "related_reviewer_vids" ||
+        $view->name == "related_reviewer_mobile_vids" ||
+        $view->name == "fan_media_artwork_block" ||
+        $view->name == "mobile_playthrough_vids" ||
+        $view->name == "related_affiliate_series_vids")
+    {
+        $in_playthrough_vid = false;
+    }
+}
+
+/**
+ * Implements hook_node_view_alter
+ */
+function hfcustom_node_view_alter (&$build) {
+    $fan_media_array = array ("fan_media_artwork", "fan_media_file", "fan_media_video");
+
+    if ($build["#bundle"] == "fan_media_file" && $build["#view_mode"] == "full")
+    {
+        //dpm ($build);
+        $file_size = $build["field_fanmedia_file"]["#items"][0]["filesize"];
+        $build["fan_media_filesize"][0]["#markup"] = format_size ($file_size);
+    }
+    else if (in_array ($build["#bundle"], $fan_media_array) && $build["#view_mode"] == "teaser")
+    {
+        $build["post_date"]["#title"] = "Date";
+    }
+    else if ($build["#bundle"] == "podcast_episode" && ($build["#view_mode"] == "full" || $build["#view_mode"] == "teaser"))
+    {
+        $duration = (int) $build["field_podcast_episode_duration"]["#items"][0]["value"];
+
+        $seconds = $duration % 60;
+        $duration = ($duration - $seconds) / 60;
+
+        $minutes =  $duration % 60;
+        $hours = ($duration - $minutes) / 60;
+        $build["field_podcast_episode_duration"][0]["#markup"] = sprintf ("%02d:%02d:%02d", $hours, $minutes, $seconds);
+        $build["field_podcast_episode_duration"]["#title"] = "Duration";
+    }
+}
+
+/**
+ * Implements hook_page_alter
+ */
+function hfcustom_page_alter (&$page)
+{
+    if (arg (0) == "comment" && arg (1) == "reply" && is_numeric (arg (2)))
+    {
+        if (isset ($page["content"]["system_main"]["comment_form"]["comment_preview"]))
+        {
+            unset ($page["content"]["system_main"]["comment_form"]["comment_preview"]);
+        }
+
+        if (isset ($page["content"]["system_main"]["comment_form"]["actions"]["preview"]))
+        {
+            unset ($page["content"]["system_main"]["comment_form"]["actions"]["preview"]);
+        }
+    }
+}
+

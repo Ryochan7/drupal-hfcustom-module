@@ -1,0 +1,7 @@
+name = Hellfire Commentaries Custom
+description = This module holds custom code required for hellfirecomms.com.
+core = 7.x
+dependencies[] = views
+dependencies[] = switchtheme
+
+
