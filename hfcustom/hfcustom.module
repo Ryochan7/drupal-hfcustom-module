@@ -449,53 +449,54 @@ function hfcustom_block_save ($delta = '', $edit = array ()) {
 }
 
 /**
- * Implements hook_node_load ()
+ * Implements hook_node_view ()
  */
-function hfcustom_node_load ($nodes) {
+function hfcustom_node_view ($node, $view_mode, $langcode) {
     $content_array = array (
         "playthrough_video", "video_game_music_picks_video",
         "fan_media_artwork",
     );
 
-    foreach ($nodes as $node) {
+    if ($view_mode == "full" && in_array($node->type, $content_array))
+    {
         $query = db_select ("node", "n")
-            ->condition ("n.type", $node->type, "=")
-        ->condition ("n.created", $node->created, ">")
             ->condition ("n.status", "1", "=")
+            ->condition ("n.type", $node->type, "=")
+            ->condition ("n.created", $node->created, ">")
             ->fields ("n", array ("nid"))
             ->orderBy ("n.created", "ASC")
             ->range (0, 1);
 
         $prev_query = db_select ("node", "n")
-        ->condition ("n.type", $node->type, "=")
             ->condition ("n.status", "1", "=")
+            ->condition ("n.type", $node->type, "=")
             ->condition ("n.created", $node->created, "<")
             ->fields ("n", array ("nid"))
             ->orderBy ("n.created", "DESC")
             ->range (0, 1);
 
-        if (in_array ($node->type, $content_array)) {
-            if ($node->type == "playthrough_video") {
-                $query->join ("field_data_field_playthrough", "play", "n.type = play.bundle AND n.nid = play.entity_id");
-                $query = $query->condition ("play.field_playthrough_nid", $node->field_playthrough["und"][0]["nid"]);
-            }
+        if ($node->type == "playthrough_video")
+        {
+            $query->join("field_data_field_playthrough", "play", "n.type = play.bundle AND n.nid = play.entity_id");
+            $prev_query->join("field_data_field_playthrough", "play", "n.type = play.bundle AND n.nid = play.entity_id");
 
-            $next_nid = $query->execute ()->fetchField ();
-            $prev_nid = $prev_query->execute ()->fetchField ();
+            $query = $query->condition("play.field_playthrough_nid", $node->field_playthrough["und"][0]["nid"]);
+            $prev_query = $prev_query->condition("play.field_playthrough_nid", $node->field_playthrough["und"][0]["nid"]);
+        }
 
-            $node->next_node_url = "";
-            if ($next_nid) {
-                $node->next_node_url = url ("node/{$next_nid}");
-            }
-            if ($prev_nid)
-            {
-                $node->prev_node_url = url ("node/{$prev_nid}");
-            }
+        $next_nid = $query->execute()->fetchField();
+        $prev_nid = $prev_query->execute()->fetchField();
+
+        $node->next_node_url = "";
+        if ($next_nid) {
+            $node->next_node_url = url("node/{$next_nid}");
+        }
+        if ($prev_nid)
+        {
+            $node->prev_node_url = url("node/{$prev_nid}");
         }
     }
 }
-
-
 
 /**
  * Implements hook_node_presave ()
